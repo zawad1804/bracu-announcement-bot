@@ -64,7 +64,13 @@ function savePosted(posted) {
 }
 
 async function postToDiscord(announcement) {
-    console.log(`📤 Posting to ${WEBHOOK_URLS.length} Discord server(s): "${announcement.title}"`);
+    console.log(`📤 Attempting to post to ${WEBHOOK_URLS.length} Discord server(s): "${announcement.title}"`);
+    
+    // Debug: Print webhook URLs (partially masked for security)
+    WEBHOOK_URLS.forEach((url, i) => {
+        const maskedUrl = url.substring(0, 30) + '...' + url.substring(url.length - 10);
+        console.log(`🔹 Webhook #${i+1} (${WEBHOOK_NAMES[i]}): ${maskedUrl}`);
+    });
     
     // Format the date in a more readable format if possible
     let pubDate = announcement.pubDate;
@@ -113,30 +119,47 @@ async function postToDiscord(announcement) {
         const serverName = WEBHOOK_NAMES[i] || `Server ${i + 1}`;
         
         try {
+            console.log(`🔄 Processing webhook for server: ${serverName}`);
+            
             // Extract webhook ID and token from URL
-            const parts = getWebhookParts(webhookUrl);
+            let parts;
+            try {
+                parts = getWebhookParts(webhookUrl);
+                console.log(`✅ Successfully parsed webhook URL for ${serverName}`);
+            } catch (parseError) {
+                console.error(`❌ Invalid webhook URL format for ${serverName}: ${parseError.message}`);
+                results.push({ success: false, serverName, error: 'Invalid webhook URL format' });
+                continue;
+            }
             
             // Create webhook client
+            console.log(`🔄 Creating webhook client for ${serverName}...`);
             const webhookClient = new WebhookClient({ 
                 id: parts.id, 
                 token: parts.token 
             });
             
             // Send the embed through the webhook
-            await webhookClient.send({
+            console.log(`🔄 Sending message to ${serverName}...`);
+            const response = await webhookClient.send({
                 embeds: [embed]
             });
             
-            console.log(`✅ Posted to Discord server: ${serverName}`);
+            console.log(`✅ Successfully posted to Discord server: ${serverName}`);
             results.push({ success: true, serverName });
             
             // Add a small delay between webhooks to avoid rate limits
             await new Promise(resolve => setTimeout(resolve, 500));
         } catch (error) {
             console.error(`❌ Error posting to server "${serverName}": ${error.message}`);
+            console.error(`   Error details:`, error);
             results.push({ success: false, serverName, error: error.message });
         }
     }
+    
+    // Summary of results
+    const successCount = results.filter(r => r.success).length;
+    console.log(`📊 Discord posting summary: ${successCount}/${results.length} successful`);
     
     // If all failed, throw an error
     if (results.length > 0 && results.every(r => !r.success)) {
@@ -299,7 +322,7 @@ async function main() {
         
         let newPosted = false;
         let newCount = 0;
-        for (i=announcements.length-1;i>=0;i--) {
+        for (let i=announcements.length-1;i>=0;i--) {
             const ann = announcements[i];
             if (!postedIds.has(ann.id)) {
                 await postToDiscord(ann);
