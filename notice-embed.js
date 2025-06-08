@@ -63,6 +63,7 @@ function savePosted(posted) {
     fs.writeFileSync(DB_FILE, JSON.stringify(posted, null, 2));
 }
 
+// Update the postToDiscord function to handle timeouts better with retries
 async function postToDiscord(announcement) {
     console.log(`📤 Attempting to post to ${WEBHOOK_URLS.length} Discord server(s): "${announcement.title}"`);
     
@@ -113,58 +114,86 @@ async function postToDiscord(announcement) {
     
     const results = [];
     
-    // Post to each webhook
+    // Post to each webhook with better timeout handling
     for (let i = 0; i < WEBHOOK_URLS.length; i++) {
         const webhookUrl = WEBHOOK_URLS[i];
         const serverName = WEBHOOK_NAMES[i] || `Server ${i + 1}`;
         
-        try {
-            console.log(`🔄 Processing webhook for server: ${serverName}`);
-            
-            // Extract webhook ID and token from URL
-            let parts;
+        // Retry the entire webhook posting process up to 3 times with increasing timeouts
+        let success = false;
+        let lastError = null;
+        
+        for (let attempt = 1; attempt <= 3; attempt++) {
             try {
-                parts = getWebhookParts(webhookUrl);
-                console.log(`✅ Successfully parsed webhook URL for ${serverName}`);
-            } catch (parseError) {
-                console.error(`❌ Invalid webhook URL format for ${serverName}: ${parseError.message}`);
-                results.push({ success: false, serverName, error: 'Invalid webhook URL format' });
-                continue;
-            }
-            
-            // Create webhook client
-            console.log(`🔄 Creating webhook client for ${serverName}...`);
-            const webhookClient = new WebhookClient({ 
-                id: parts.id, 
-                token: parts.token 
-            });
-            
-            // Send the embed through the webhook with retries
-            console.log(`🔄 Sending message to ${serverName}...`);
-            
-            const response = await retryWithBackoff(async () => {
-                return await webhookClient.send({
+                console.log(`🔄 [Attempt ${attempt}/3] Processing webhook for server: ${serverName}`);
+                
+                // Extract webhook ID and token from URL
+                let parts;
+                try {
+                    parts = getWebhookParts(webhookUrl);
+                    console.log(`✅ Successfully parsed webhook URL for ${serverName}`);
+                } catch (parseError) {
+                    console.error(`❌ Invalid webhook URL format for ${serverName}: ${parseError.message}`);
+                    lastError = parseError;
+                    break; // No need to retry if URL is invalid
+                }
+                
+                // Create webhook client
+                console.log(`🔄 Creating webhook client for ${serverName}...`);
+                const webhookClient = new WebhookClient({ 
+                    id: parts.id, 
+                    token: parts.token 
+                });
+                
+                // Send the embed through the webhook with per-attempt timeout
+                console.log(`🔄 Sending message to ${serverName}...`);
+                
+                // Increase timeout for each retry
+                const timeoutMs = 10000 * attempt; // 10s, 20s, 30s
+                
+                // Create a promise that rejects after timeout
+                const timeoutPromise = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error(`Discord webhook request timed out after ${timeoutMs/1000} seconds`)), timeoutMs)
+                );
+                
+                // Create the webhook send promise
+                const webhookPromise = webhookClient.send({
                     embeds: [embed]
                 });
-            }, 3, 2000); // 3 retries, starting with 2-second delay
-            
-            console.log(`✅ Successfully posted to Discord server: ${serverName}`);
-            results.push({ success: true, serverName });
-            
-            // Add a small delay between webhooks to avoid rate limits
-            await new Promise(resolve => setTimeout(resolve, 500));
-        } catch (error) {
-            console.error(`❌ Error posting to server "${serverName}": ${error.message}`);
-            
-            // Log more specific error details
-            if (error.code) {
-                console.error(`   Discord error code: ${error.code}`);
+                
+                // Race the webhook request against the timeout
+                await Promise.race([webhookPromise, timeoutPromise]);
+                
+                console.log(`✅ Successfully posted to Discord server: ${serverName}`);
+                results.push({ success: true, serverName });
+                success = true;
+                break; // Exit the retry loop on success
+            } catch (error) {
+                lastError = error;
+                console.error(`❌ [Attempt ${attempt}/3] Error posting to server "${serverName}": ${error.message}`);
+                
+                if (attempt < 3) {
+                    // Calculate backoff delay with exponential increase
+                    const backoffDelay = 2000 * Math.pow(2, attempt - 1); // 2s, 4s, 8s
+                    console.log(`⏱️ Retrying in ${backoffDelay/1000} seconds...`);
+                    await new Promise(resolve => setTimeout(resolve, backoffDelay));
+                } else {
+                    console.error(`❌ All 3 attempts failed for server "${serverName}"`);
+                }
             }
-            
-            results.push({ success: false, serverName, error: error.message });
-            
-            // Continue with other webhooks rather than letting one failure stop everything
         }
+        
+        // If all retries failed, add the failure to results
+        if (!success) {
+            results.push({ 
+                success: false, 
+                serverName, 
+                error: lastError ? lastError.message : 'Unknown error' 
+            });
+        }
+        
+        // Add a small delay between different webhooks to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 1000));
     }
     
     // Summary of results
@@ -173,32 +202,10 @@ async function postToDiscord(announcement) {
     
     // If all failed, throw an error
     if (results.length > 0 && results.every(r => !r.success)) {
-        throw new Error('Failed to post to all Discord webhooks');
+        throw new Error('Failed to post to all Discord webhooks after multiple retries');
     }
     
     return results;
-}
-
-// Add this helper function
-async function retryWithBackoff(fn, retries = 3, backoffMs = 1000) {
-    let lastError;
-    
-    for (let attempt = 1; attempt <= retries; attempt++) {
-        try {
-            return await fn();
-        } catch (error) {
-            lastError = error;
-            console.log(`⚠️ Attempt ${attempt}/${retries} failed: ${error.message}`);
-            
-            if (attempt < retries) {
-                const delay = backoffMs * Math.pow(2, attempt - 1);
-                console.log(`⏱️ Retrying in ${delay}ms...`);
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        }
-    }
-    
-    throw lastError;
 }
 
 async function fetchAnnouncements() {
