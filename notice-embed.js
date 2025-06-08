@@ -21,7 +21,9 @@ while (WEBHOOK_NAMES.length < WEBHOOK_URLS.length) {
     WEBHOOK_NAMES.push(`Server ${WEBHOOK_NAMES.length + 1}`);
 }
 
-const DB_FILE = process.env.DB_FILE || 'announcements.json';
+const DB_FILE = process.env.DB_FILE || 'bracu-announcements.json';
+console.log(`📁 Using database file: ${DB_FILE}`);
+
 const RSS_JSON_URL = 'https://api.rss2json.com/v1/api.json?rss_url=https%3A%2F%2Fwww.bracu.ac.bd%2Frss.xml';
 const CHECK_INTERVAL_MS = parseInt(process.env.CHECK_INTERVAL_MS) || 30 * 60 * 1000; // Default: 30 minutes
 
@@ -34,11 +36,27 @@ const getWebhookParts = (webhookUrl) => {
     };
 };
 
+// Update the loadPosted function with better error handling
 function loadPosted() {
+    console.log(`📂 Checking for database file at: ${DB_FILE}`);
     if (fs.existsSync(DB_FILE)) {
-        return JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+        try {
+            const data = fs.readFileSync(DB_FILE, 'utf8');
+            console.log(`📥 Successfully loaded database file (${data.length} bytes)`);
+            return JSON.parse(data);
+        } catch (error) {
+            console.error(`❌ Error reading database file: ${error.message}`);
+            console.log(`🔧 Creating new empty database`);
+            const emptyData = [];
+            fs.writeFileSync(DB_FILE, JSON.stringify(emptyData, null, 2));
+            return emptyData;
+        }
+    } else {
+        console.log(`📝 Database file not found, creating new empty database`);
+        const emptyData = [];
+        fs.writeFileSync(DB_FILE, JSON.stringify(emptyData, null, 2));
+        return emptyData;
     }
-    return [];
 }
 
 function savePosted(posted) {
@@ -166,9 +184,9 @@ async function fetchAnnouncements() {
 // Add GitHub repository details
 const GITHUB_REPO_OWNER = process.env.GITHUB_REPO_OWNER || 'zawad1804'; // Your GitHub username
 const GITHUB_REPO_NAME = process.env.GITHUB_REPO_NAME || 'bracu-announcement-bot'; // Your repository name
-const GITHUB_FILE_PATH = 'announcements.json'; // Path to file in repository
+const GITHUB_FILE_PATH = 'bracu-announcements.json'; // Path to file in repository
 
-// Add this function to sync data to GitHub
+// Update the syncToGitHub function to handle missing files
 async function syncToGitHub() {
   console.log('🔄 Attempting to sync announcements to GitHub...');
   
@@ -178,6 +196,12 @@ async function syncToGitHub() {
   }
   
   try {
+    // Check if the file exists first
+    if (!fs.existsSync(DB_FILE)) {
+      console.log(`⚠️ Database file not found (${DB_FILE}). Creating empty database before syncing.`);
+      fs.writeFileSync(DB_FILE, JSON.stringify([], null, 2));
+    }
+    
     const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
     const content = fs.readFileSync(DB_FILE, 'utf8');
     
