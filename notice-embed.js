@@ -139,11 +139,14 @@ async function postToDiscord(announcement) {
                 token: parts.token 
             });
             
-            // Send the embed through the webhook
+            // Send the embed through the webhook with retries
             console.log(`🔄 Sending message to ${serverName}...`);
-            const response = await webhookClient.send({
-                embeds: [embed]
-            });
+            
+            const response = await retryWithBackoff(async () => {
+                return await webhookClient.send({
+                    embeds: [embed]
+                });
+            }, 3, 2000); // 3 retries, starting with 2-second delay
             
             console.log(`✅ Successfully posted to Discord server: ${serverName}`);
             results.push({ success: true, serverName });
@@ -152,8 +155,15 @@ async function postToDiscord(announcement) {
             await new Promise(resolve => setTimeout(resolve, 500));
         } catch (error) {
             console.error(`❌ Error posting to server "${serverName}": ${error.message}`);
-            console.error(`   Error details:`, error);
+            
+            // Log more specific error details
+            if (error.code) {
+                console.error(`   Discord error code: ${error.code}`);
+            }
+            
             results.push({ success: false, serverName, error: error.message });
+            
+            // Continue with other webhooks rather than letting one failure stop everything
         }
     }
     
@@ -167,6 +177,28 @@ async function postToDiscord(announcement) {
     }
     
     return results;
+}
+
+// Add this helper function
+async function retryWithBackoff(fn, retries = 3, backoffMs = 1000) {
+    let lastError;
+    
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            return await fn();
+        } catch (error) {
+            lastError = error;
+            console.log(`⚠️ Attempt ${attempt}/${retries} failed: ${error.message}`);
+            
+            if (attempt < retries) {
+                const delay = backoffMs * Math.pow(2, attempt - 1);
+                console.log(`⏱️ Retrying in ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+    
+    throw lastError;
 }
 
 async function fetchAnnouncements() {
@@ -325,18 +357,34 @@ async function main() {
         for (let i=announcements.length-1;i>=0;i--) {
             const ann = announcements[i];
             if (!postedIds.has(ann.id)) {
-                await postToDiscord(ann);
-                posted.push({ 
-                    id: ann.id, 
-                    title: ann.title,
-                    postedAt: new Date().toISOString() 
-                });
-                newPosted = true;
-                newCount++;
-                console.log(`📢 New announcement posted: "${ann.title}" [ID: ${ann.id}]`);
-                
-                // Add a small delay between posting to avoid rate limits
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                try {
+                    // Make Discord posting non-blocking with a timeout
+                    const postingPromise = postToDiscord(ann);
+                    const timeoutPromise = new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Discord posting timed out after 30 seconds')), 30000)
+                    );
+                    
+                    await Promise.race([postingPromise, timeoutPromise])
+                        .catch(error => {
+                            console.error(`⚠️ Could not complete Discord posting: ${error.message}`);
+                            console.log(`⚠️ Continuing with bot operation despite Discord posting issues`);
+                        });
+                    
+                    // Continue with the rest of your code
+                    posted.push({ 
+                        id: ann.id, 
+                        title: ann.title,
+                        postedAt: new Date().toISOString() 
+                    });
+                    newPosted = true;
+                    newCount++;
+                    console.log(`📢 New announcement processed: "${ann.title}" [ID: ${ann.id}]`);
+                    
+                    // Add a small delay between posting to avoid rate limits
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                } catch (error) {
+                    console.error(`❌ Error processing announcement: ${error.message}`);
+                }
             }
         }
         
