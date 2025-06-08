@@ -148,22 +148,8 @@ async function fetchAnnouncements() {
         
         console.log(`📋 Found ${data.items.length} items in RSS feed`);
         
-        // Fix the filter - remove the "return true" line to enable filtering
-        // If you want all items, just return true directly
-        const announcements = data.items.filter(item => {
-            // Uncomment this line if you want all announcements without filtering
-            // return true;
-            
-            const title = item.title.toLowerCase();
-            const description = item.description.toLowerCase();
-            return title.includes('announcement') || 
-                   title.includes('notice') || 
-                   description.includes('announcement') || 
-                   description.includes('notice') ||
-                   item.link.includes('announcements');
-        });
-        
-        return announcements.map(item => ({
+        // Return all items from the RSS feed
+        return data.items.map(item => ({
             id: item.guid || item.link,
             title: item.title,
             pubDate: item.pubDate,
