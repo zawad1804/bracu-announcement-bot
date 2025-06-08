@@ -354,31 +354,49 @@ async function main() {
         
         let newPosted = false;
         let newCount = 0;
-        for (let i=announcements.length-1;i>=0;i--) {
+        const successfulAnnouncements = []; // Track successfully posted announcements
+        
+        for (let i=announcements.length-1; i>=0; i--) {
             const ann = announcements[i];
             if (!postedIds.has(ann.id)) {
                 try {
-                    // Make Discord posting non-blocking with a timeout
+                    // Make Discord posting with a timeout
                     const postingPromise = postToDiscord(ann);
                     const timeoutPromise = new Promise((_, reject) => 
                         setTimeout(() => reject(new Error('Discord posting timed out after 30 seconds')), 30000)
                     );
                     
-                    await Promise.race([postingPromise, timeoutPromise])
-                        .catch(error => {
-                            console.error(`⚠️ Could not complete Discord posting: ${error.message}`);
-                            console.log(`⚠️ Continuing with bot operation despite Discord posting issues`);
-                        });
+                    // Try to post to Discord
+                    let discordSuccess = false;
+                    try {
+                        const postingResult = await Promise.race([postingPromise, timeoutPromise]);
+                        
+                        // Check if posting was successful to at least one server
+                        if (postingResult && postingResult.some(r => r.success)) {
+                            discordSuccess = true;
+                            console.log(`✅ Successfully posted to at least one Discord server`);
+                        } else {
+                            console.log(`❌ Failed to post to any Discord servers`);
+                        }
+                    } catch (postError) {
+                        console.error(`⚠️ Error posting to Discord: ${postError.message}`);
+                        discordSuccess = false;
+                    }
                     
-                    // Continue with the rest of your code
-                    posted.push({ 
-                        id: ann.id, 
-                        title: ann.title,
-                        postedAt: new Date().toISOString() 
-                    });
-                    newPosted = true;
-                    newCount++;
-                    console.log(`📢 New announcement processed: "${ann.title}" [ID: ${ann.id}]`);
+                    // Only save announcements that were successfully posted to Discord
+                    if (discordSuccess) {
+                        successfulAnnouncements.push({
+                            id: ann.id, 
+                            title: ann.title,
+                            postedAt: new Date().toISOString()
+                        });
+                        
+                        newPosted = true;
+                        newCount++;
+                        console.log(`📢 New announcement successfully posted and will be saved: "${ann.title}" [ID: ${ann.id}]`);
+                    } else {
+                        console.log(`⚠️ Announcement not saved due to Discord posting failure: "${ann.title}" [ID: ${ann.id}]`);
+                    }
                     
                     // Add a small delay between posting to avoid rate limits
                     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -388,12 +406,19 @@ async function main() {
             }
         }
         
-        if (newPosted) {
+        // Only save announcements that were successfully posted
+        if (successfulAnnouncements.length > 0) {
+            // Add all successful announcements to the posted list
+            posted.push(...successfulAnnouncements);
+            
+            // Save to JSON file
             savePosted(posted);
-            console.log(`💾 Updated database with ${newCount} new announcements`);
+            console.log(`💾 Updated database with ${successfulAnnouncements.length} new announcements`);
             
             // Sync to GitHub after saving new announcements
             await syncToGitHub();
+        } else if (newPosted) {
+            console.log(`⚠️ No announcements were saved because none could be posted to Discord successfully`);
         } else {
             console.log(`😴 No new announcements found since last check`);
             
