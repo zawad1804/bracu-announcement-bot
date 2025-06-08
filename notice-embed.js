@@ -148,12 +148,14 @@ async function fetchAnnouncements() {
         
         console.log(`📋 Found ${data.items.length} items in RSS feed`);
         
-        // Filter items for announcements (optional)
-        // You can remove this filtering if you want all posts from the RSS feed
+        // Fix the filter - remove the "return true" line to enable filtering
+        // If you want all items, just return true directly
         const announcements = data.items.filter(item => {
+            // Uncomment this line if you want all announcements without filtering
+            // return true;
+            
             const title = item.title.toLowerCase();
             const description = item.description.toLowerCase();
-            return true;
             return title.includes('announcement') || 
                    title.includes('notice') || 
                    description.includes('announcement') || 
@@ -239,54 +241,6 @@ async function main() {
     }
 }
 
-// Update other logging functions too
-async function fetchAnnouncements() {
-    console.log(`📡 Fetching RSS feed from BRAC University...`);
-    try {
-        const response = await nodeFetch(RSS_JSON_URL, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
-            }
-        });
-        
-        if (!response.ok) {
-            throw new Error(`❌ RSS feed error: ${response.status} ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        
-        if (data.status !== 'ok' || !data.items || !Array.isArray(data.items)) {
-            throw new Error('❌ Invalid response format from RSS feed');
-        }
-        
-        console.log(`📋 Found ${data.items.length} items in RSS feed`);
-        
-        // Filter items for announcements (optional)
-        // You can remove this filtering if you want all posts from the RSS feed
-        const announcements = data.items.filter(item => {
-            const title = item.title.toLowerCase();
-            const description = item.description.toLowerCase();
-            return true;
-            return title.includes('announcement') || 
-                   title.includes('notice') || 
-                   description.includes('announcement') || 
-                   description.includes('notice') ||
-                   item.link.includes('announcements');
-        });
-        
-        return announcements.map(item => ({
-            id: item.guid || item.link,
-            title: item.title,
-            pubDate: item.pubDate,
-            link: item.link,
-            description: item.description
-        }));
-    } catch (error) {
-        console.error('❌ Error fetching RSS feed:', error.message);
-        throw error;
-    }
-}
-
 // Update the initial run message
 // Run immediately once
 console.log(`🔔 BRAC University Announcement Bot Initializing...`);
@@ -306,3 +260,51 @@ const nextCheckTimeBDT = nextCheckTime.toLocaleString('en-US', bdtOptions);
 
 console.log(`⏰ Current time: ${currentTimeBDT} (GMT+6) | Next check: ${nextCheckTimeBDT} (GMT+6)`);
 setInterval(main, CHECK_INTERVAL_MS);
+
+const http = require('http');
+const PORT = process.env.PORT || 3000;
+
+// Create a simple HTTP server
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/html' });
+  res.end(`
+    <html>
+      <head>
+        <title>BRAC University Announcement Bot</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
+          h1 { color: #336ca6; }
+          .container { max-width: 800px; margin: 0 auto; }
+          .status { padding: 15px; background-color: #f5f5f5; border-radius: 5px; }
+          .footer { margin-top: 30px; font-size: 0.8em; color: #666; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>BRAC University Announcement Bot</h1>
+          <div class="status">
+            <p>✅ Bot is running</p>
+            <p>Last check: ${new Date().toLocaleString('en-US', { 
+              timeZone: 'Asia/Dhaka',
+              hour12: true,
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })} (GMT+6)</p>
+            <p>Check interval: ${CHECK_INTERVAL_MS/1000/60} minutes</p>
+          </div>
+          <div class="footer">
+            <p>BRAC University Announcement Bot - Running on Render</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  `);
+});
+
+// Start the server
+server.listen(PORT, () => {
+  console.log(`🌐 Web server running on port ${PORT}`);
+});
