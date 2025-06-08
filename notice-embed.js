@@ -1,5 +1,6 @@
 const fs = require('fs');
 const { WebhookClient, EmbedBuilder } = require('discord.js');
+const { Octokit } = require('@octokit/rest');
 require('dotenv').config(); // Load environment variables
 
 // For proper ES Module support with node-fetch
@@ -162,6 +163,84 @@ async function fetchAnnouncements() {
     }
 }
 
+// Add GitHub repository details
+const GITHUB_REPO_OWNER = process.env.GITHUB_REPO_OWNER || 'zawad1804'; // Your GitHub username
+const GITHUB_REPO_NAME = process.env.GITHUB_REPO_NAME || 'bracu-announcement-bot'; // Your repository name
+const GITHUB_FILE_PATH = 'announcements.json'; // Path to file in repository
+
+// Add this function to sync data to GitHub
+async function syncToGitHub() {
+  console.log('🔄 Attempting to sync announcements to GitHub...');
+  
+  if (!process.env.GITHUB_TOKEN) {
+    console.log('⚠️ No GitHub token found in environment variables. Skipping sync to GitHub.');
+    return false;
+  }
+  
+  try {
+    const octokit = new Octokit({ auth: process.env.GITHUB_TOKEN });
+    const content = fs.readFileSync(DB_FILE, 'utf8');
+    
+    // Try to get the current file (to get the SHA)
+    let fileSha;
+    try {
+      const { data } = await octokit.repos.getContent({
+        owner: GITHUB_REPO_OWNER,
+        repo: GITHUB_REPO_NAME,
+        path: GITHUB_FILE_PATH,
+      });
+      fileSha = data.sha;
+      console.log(`📄 Found existing file in GitHub repository (SHA: ${fileSha.substring(0, 7)}...)`);
+    } catch (error) {
+      console.log('📄 File does not exist in GitHub repository yet, will create it');
+    }
+    
+    // Prepare the commit data
+    const commitData = {
+      owner: GITHUB_REPO_OWNER,
+      repo: GITHUB_REPO_NAME,
+      path: GITHUB_FILE_PATH,
+      message: `Update announcements database [${new Date().toISOString()}]`,
+      content: Buffer.from(content).toString('base64'),
+      committer: {
+        name: 'BRAC University Announcement Bot',
+        email: 'bot@example.com' // Use a valid email or your GitHub email
+      }
+    };
+    
+    // Add SHA if updating existing file
+    if (fileSha) {
+      commitData.sha = fileSha;
+    }
+    
+    // Create or update the file
+    const response = await octokit.repos.createOrUpdateFileContents(commitData);
+    
+    console.log(`✅ Successfully synced announcements to GitHub (commit: ${response.data.commit.sha.substring(0, 7)}...)`);
+    return true;
+  } catch (error) {
+    console.error('❌ Error syncing to GitHub:', error.message);
+    if (error.response) {
+      console.error(`   Status: ${error.response.status}, Message: ${error.response.data.message}`);
+    }
+    return false;
+  }
+}
+
+// Add a sync schedule function
+let lastSyncTime = 0;
+const SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000; // Default: once per day
+
+async function syncIfNeeded() {
+  const now = Date.now();
+  if (now - lastSyncTime >= SYNC_INTERVAL_MS) {
+    const success = await syncToGitHub();
+    if (success) {
+      lastSyncTime = now;
+    }
+  }
+}
+
 async function main() {
     try {
         const currentTime = new Date();
@@ -217,8 +296,14 @@ async function main() {
         if (newPosted) {
             savePosted(posted);
             console.log(`💾 Updated database with ${newCount} new announcements`);
+            
+            // Sync to GitHub after saving new announcements
+            await syncToGitHub();
         } else {
             console.log(`😴 No new announcements found since last check`);
+            
+            // Periodically sync even if no new announcements
+            await syncIfNeeded();
         }
         
         console.log(`🔄 Bot running. Next check in ${CHECK_INTERVAL_MS/1000/60} minutes...`);
@@ -294,3 +379,15 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   console.log(`🌐 Web server running on port ${PORT}`);
 });
+
+// Perform an initial sync when the bot starts
+setTimeout(async () => {
+  console.log('🔄 Performing initial GitHub sync...');
+  await syncToGitHub();
+}, 30000); // Wait 30 seconds after startup to ensure everything is initialized
+
+// Schedule periodic GitHub sync
+setInterval(async () => {
+  console.log('⏰ Running scheduled GitHub sync...');
+  await syncToGitHub();
+}, SYNC_INTERVAL_MS);
